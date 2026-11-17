@@ -6,6 +6,13 @@
 
   const CLASS_OPTIONS = ["I", "II", "III"];
 
+  const METER_TYPE_OPTIONS = ["Liquid", "Mass Flow", "Water"];
+  const ACCURACY_CLASS_OPTIONS_BY_METER_TYPE = {
+    "Liquid": ["0.3", "0.3A", "0.5", "1.1"],
+    "Mass Flow": ["0.3", "0.3A", "0.5", "1.0", "2.0", "2.5"],
+    "Water": [],
+  };
+
   const JOB_FIELDS = [
     ["customer", "Customer", "text"],
     ["location", "Location", "text"],
@@ -26,9 +33,12 @@
     ["tripLeftSite", "Left Site"], ["tripBack", "Back"],
     ["driveThereMin", "Drive There (min)"], ["onSiteMin", "On Site (min)"], ["driveBackMin", "Drive Back (min)"],
     ["milesOut", "Miles There"], ["milesBack", "Miles Back"],
-    ["class", "Class"], ["unitNumber", "Unit #"], ["scaleLocation", "Scale Location"],
+    ["deviceType", "Device Type"],
+    ["class", "Class"], ["scaleType", "Scale Type"], ["unitNumber", "Unit #"], ["scaleLocation", "Scale Location"],
     ["makeModel", "Make & Model #"], ["serial", "Serial #"],
     ["capacityByDivision", "Capacity by Division"], ["shiftTest", "Shift Test"],
+    ["meterType", "Meter Type"], ["accuracyClass", "Accuracy Class"], ["meterLocation", "Meter Location"],
+    ["ratedCapacity", "Rated Capacity / Flow"],
     ["asFoundTest1", "As Found Error Test #1"], ["asFoundTest2", "As Found Error Test #2"],
     ["asFoundTest3", "As Found Error Test #3"], ["adjusted", "Adjusted"],
     ["asLeftTest1", "As Left Test #1"], ["asLeftTest2", "As Left Test #2"],
@@ -154,6 +164,30 @@
     grid.innerHTML = thumbs.join("");
   }
 
+  let activeDocURLs = [];
+  async function renderDocList(m) {
+    const list = app.querySelector("[data-doc-list]");
+    if (!list) return;
+    activeDocURLs.forEach((u) => URL.revokeObjectURL(u));
+    activeDocURLs = [];
+    if (!m.docs || m.docs.length === 0) {
+      list.innerHTML = "";
+      return;
+    }
+    const rows = await Promise.all(m.docs.map(async (d) => {
+      const blob = await getImageBlob(d.id);
+      if (!blob) return "";
+      const url = URL.createObjectURL(blob);
+      activeDocURLs.push(url);
+      return `<div class="doc-row">
+        <a class="doc-name" href="${url}" target="_blank" rel="noopener">${esc(d.name)}</a>
+        <button type="button" class="doc-del" data-action="delete-doc" data-doc-id="${d.id}" aria-label="Delete ${esc(d.name)}">×</button>
+      </div>`;
+    }));
+    if (!list.isConnected) return;
+    list.innerHTML = rows.join("");
+  }
+
   function todayISO() {
     const d = new Date();
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
@@ -165,7 +199,7 @@
       customer: "", location: "", phone: "", contact: "", email: "",
       jobNumber: "", date: todayISO(), calibrationSchedule: "", nextDueBy: "",
       notes: "", createdAt: Date.now(), updatedAt: Date.now(),
-      scales: [],
+      scales: [], meters: [],
       trip: { outStart: null, outEnd: null, backStart: null, backEnd: null, milesOut: "", milesBack: "" },
     };
   }
@@ -175,9 +209,16 @@
     return job.trip;
   }
 
+  function ensureMeters(job) {
+    if (!Array.isArray(job.meters)) job.meters = [];
+    return job.meters;
+  }
+
+  const SCALE_TYPE_OPTIONS = ["General", "Crane/Hopper"];
+
   function newScale() {
     return {
-      id: uid(), class: "",
+      id: uid(), class: "", scaleType: "",
       unitNumber: "", scaleLocation: "", makeModel: "", serial: "", capacityByDivision: "",
       shiftTest: "",
       asFoundTest1: "", asFoundTest2: "", asFoundTest3: "",
@@ -188,14 +229,34 @@
     };
   }
 
+  function newMeter() {
+    return {
+      id: uid(), meterType: "", accuracyClass: "",
+      unitNumber: "", meterLocation: "", makeModel: "", serial: "", ratedCapacity: "",
+      asFoundTest1: "", asFoundTest2: "", asFoundTest3: "",
+      adjusted: "",
+      asLeftTest1: "", asLeftTest2: "",
+      passFail: "", note: "",
+      images: [],
+    };
+  }
+
   function findJob(id) { return db.jobs.find(j => j.id === id); }
   function findScale(job, id) { return job.scales.find(s => s.id === id); }
+  function findMeter(job, id) { return ensureMeters(job).find(m => m.id === id); }
 
   function isScaleEmpty(s) {
-    const fields = ["class", "unitNumber", "scaleLocation", "makeModel", "serial",
+    const fields = ["class", "scaleType", "unitNumber", "scaleLocation", "makeModel", "serial",
       "capacityByDivision", "shiftTest", "asFoundTest1", "asFoundTest2", "asFoundTest3",
       "adjusted", "asLeftTest1", "asLeftTest2", "passFail", "note"];
     return fields.every(f => !s[f]) && (!s.images || s.images.length === 0);
+  }
+
+  function isMeterEmpty(m) {
+    const fields = ["meterType", "accuracyClass", "unitNumber", "meterLocation", "makeModel", "serial",
+      "ratedCapacity", "asFoundTest1", "asFoundTest2", "asFoundTest3",
+      "adjusted", "asLeftTest1", "asLeftTest2", "passFail", "note"];
+    return fields.every(f => !m[f]) && (!m.images || m.images.length === 0);
   }
 
   // ---------- routing ----------
@@ -254,8 +315,10 @@
     base.driveBackMin = (t.backStart && t.backEnd) ? Math.round((t.backEnd - t.backStart) / 60000) : "";
     base.milesOut = t.milesOut || "";
     base.milesBack = t.milesBack || "";
-    if (job.scales.length === 0) return [base];
-    return job.scales.map(s => ({ ...base, ...s }));
+    const scaleRows = job.scales.map(s => ({ ...base, deviceType: "Scale", ...s }));
+    const meterRows = ensureMeters(job).map(m => ({ ...base, deviceType: m.meterType ? `${m.meterType} Meter` : "Meter", ...m }));
+    const rows = [...scaleRows, ...meterRows];
+    return rows.length === 0 ? [base] : rows;
   }
 
   function rowsToCSV(rows) {
@@ -330,10 +393,15 @@
       const job = findJob(route.jobId);
       if (!job || !findScale(job, route.scaleId)) route = { view: "home" };
     }
+    if (route.view === "meterForm") {
+      const job = findJob(route.jobId);
+      if (!job || !findMeter(job, route.meterId)) route = { view: "home" };
+    }
 
     if (route.view === "home") return renderHome();
     if (route.view === "job") return renderJobScreen(route.jobId);
     if (route.view === "scaleForm") return renderScaleForm(route.jobId, route.scaleId);
+    if (route.view === "meterForm") return renderMeterForm(route.jobId, route.meterId);
     if (route.view === "reference") return renderReference();
     if (route.view === "settings") return renderSettings();
     renderHome();
@@ -395,6 +463,7 @@
     const job = findJob(jobId);
     const byClass = CLASS_OPTIONS.map(c => [c, job.scales.filter(s => s.class === c)]);
     const unclassified = job.scales.filter(s => !CLASS_OPTIONS.includes(s.class));
+    const meters = ensureMeters(job);
 
     function scaleCard(s) {
       const title = [s.unitNumber, s.makeModel].filter(Boolean).join(" · ") || "Scale";
@@ -412,13 +481,29 @@
         </button>`;
     }
 
+    function meterCard(m) {
+      const title = [m.unitNumber, m.makeModel].filter(Boolean).join(" · ") || "Meter";
+      const meta = [m.meterType, m.accuracyClass ? `Class ${m.accuracyClass}` : "", m.serial ? `SN ${m.serial}` : ""].filter(Boolean).join(" · ");
+      const badge = m.passFail === "Pass" ? `<span class="badge pass">PASS</span>`
+        : m.passFail === "Fail" ? `<span class="badge fail">FAIL</span>`
+        : `<span class="badge neutral">—</span>`;
+      return `
+        <button class="card scale-card" data-action="open-meter" data-job="${job.id}" data-meter="${m.id}">
+          <div class="info">
+            <div class="title">${esc(title)}</div>
+            <div class="meta">${esc(meta)}</div>
+          </div>
+          ${badge}
+        </button>`;
+    }
+
     function section(label, list) {
       if (list.length === 0) return "";
       return `<div class="section-heading">${esc(label)}</div><div class="card-list">${list.map(scaleCard).join("")}</div>`;
     }
 
     app.innerHTML = `
-      ${topbar({ title: job.customer || "New Job", sub: [job.jobNumber ? "Job #" + job.jobNumber : "", fmtDate(job.date)].filter(Boolean).join(" · "), back: true, rightIcon: "🗑", rightLabel: "Delete job", onRight: "delete-job" })}
+      ${topbar({ title: job.customer || "New Job", sub: [job.jobNumber ? "Job #" + job.jobNumber : "", fmtDate(job.date)].filter(Boolean).join(" · "), back: true, right2Icon: "🖨", right2Label: "Print", onRight2: "print-job", rightIcon: "🗑", rightLabel: "Delete job", onRight: "delete-job" })}
       <div class="screen">
         <div class="card">
           ${JOB_FIELDS.map(([k, label, type]) => fieldHTML(job[k], k, label, type)).join("")}
@@ -430,6 +515,8 @@
         ${section("Unclassified", unclassified)}
         ${job.scales.length === 0 ? `<div class="empty-state">No scales added yet.</div>` : ""}
 
+        ${meters.length > 0 ? `<div class="section-heading">Meters</div><div class="card-list">${meters.map(meterCard).join("")}</div>` : ""}
+
         <div class="field" style="margin-top:22px">
           <label>Notes</label>
           <textarea data-field="notes" rows="3">${esc(job.notes)}</textarea>
@@ -438,6 +525,7 @@
       <div class="action-bar"><div class="action-bar-inner">
         <button class="btn" data-action="export-job" data-job="${job.id}">Download CSV</button>
         <button class="btn btn-icon-square" data-action="share-job" data-job="${job.id}" aria-label="Share CSV">↗</button>
+        <button class="btn" data-action="add-meter" data-job="${job.id}">+ Add Meter</button>
         <button class="btn btn-primary" data-action="add-scale" data-job="${job.id}">+ Add Scale</button>
       </div></div>
     `;
@@ -641,6 +729,7 @@
           ${numericField("serial", "Serial #", s.serial)}
           <div class="field"><label>Scale Location</label><input type="text" data-field="scaleLocation" value="${esc(s.scaleLocation)}"></div>
           <div class="field"><label>Class</label>${segHTML("class", CLASS_OPTIONS, s.class)}</div>
+          <div class="field"><label>Type</label>${segHTML("scaleType", SCALE_TYPE_OPTIONS, s.scaleType)}</div>
           <div class="field"><label>Make &amp; Model #</label><input type="text" data-field="makeModel" value="${esc(s.makeModel)}"></div>
           ${numericField("capacityByDivision", "Capacity by Division", s.capacityByDivision, { decimal: true, placeholder: "e.g. 500 lb x 0.1 lb" })}
           <div class="field">
@@ -649,6 +738,11 @@
             <button type="button" class="btn" data-action="add-photo">+ Add Photo</button>
             <input type="file" accept="image/*" multiple data-photo-input style="display:none">
           </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Handbook 44 Tolerance</legend>
+          <div data-tolerance-box>${toleranceBoxHTML(s)}</div>
         </fieldset>
 
         <fieldset>
@@ -706,6 +800,10 @@
           job.updatedAt = Date.now();
           save();
           group.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+          if (field === "class" || field === "scaleType") {
+            const box = app.querySelector("[data-tolerance-box]");
+            if (box) box.innerHTML = toleranceBoxHTML(s);
+          }
         });
       });
     });
@@ -756,59 +854,342 @@
     renderPhotoGrid(s);
   }
 
-  // Source: NIST Handbook 44 (2026 Ed.), Section 2.20 Scales — T.N.3.1 (Table 6.
-  // Maintenance Tolerances), T.N.3.2 (Acceptance = 1/2 Maintenance), S.1.2.2.2 (for
-  // Class III, e is marked by the manufacturer and e = d). All tolerance values below
-  // are in multiples of the verification scale interval "e" (= the scale division "d"
-  // printed on a Class III scale, e.g. the "0.1 lb" in "500 lb x 0.1 lb").
+  function renderMeterForm(jobId, meterId) {
+    const job = findJob(jobId);
+    const m = findMeter(job, meterId);
+    const classOptions = m.meterType ? (ACCURACY_CLASS_OPTIONS_BY_METER_TYPE[m.meterType] || []) : [];
+
+    app.innerHTML = `
+      ${topbar({ title: "Meter Details", back: true, rightIcon: "🗑", rightLabel: "Delete meter", onRight: "delete-meter" })}
+      <div class="screen">
+        <fieldset>
+          <legend>Identification</legend>
+          <div class="field"><label>Unit #</label><input type="text" data-field="unitNumber" value="${esc(m.unitNumber)}"></div>
+          ${numericField("serial", "Serial #", m.serial)}
+          <div class="field"><label>Meter Location</label><input type="text" data-field="meterLocation" value="${esc(m.meterLocation)}"></div>
+          <div class="field"><label>Meter Type</label>${segHTML("meterType", METER_TYPE_OPTIONS, m.meterType)}</div>
+          ${classOptions.length > 0 ? `<div class="field"><label>Accuracy Class</label>${segHTML("accuracyClass", classOptions, m.accuracyClass)}</div>` : ""}
+          <div class="field"><label>Make &amp; Model #</label><input type="text" data-field="makeModel" value="${esc(m.makeModel)}"></div>
+          ${numericField("ratedCapacity", "Rated Capacity / Flow", m.ratedCapacity, { decimal: true, placeholder: "e.g. 30 gpm max" })}
+          <div class="field">
+            <label>Photos</label>
+            <div class="photo-grid" data-photo-grid></div>
+            <button type="button" class="btn" data-action="add-photo">+ Add Photo</button>
+            <input type="file" accept="image/*" multiple data-photo-input style="display:none">
+          </div>
+          <div class="field">
+            <label>Documents</label>
+            <div class="doc-list" data-doc-list></div>
+            <button type="button" class="btn" data-action="add-document">+ Add Document</button>
+            <input type="file" accept="application/pdf,.doc,.docx,image/*" multiple data-doc-input style="display:none">
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Handbook 44 Tolerance</legend>
+          <div data-tolerance-box>${meterToleranceBoxHTML(m)}</div>
+        </fieldset>
+
+        <fieldset>
+          <legend>As Found Error @ Test Draft</legend>
+          <div class="field-row3">
+            ${atField("asFoundTest1", "Test #1", m.asFoundTest1)}
+            ${atField("asFoundTest2", "Test #2", m.asFoundTest2)}
+            ${atField("asFoundTest3", "Test #3", m.asFoundTest3)}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Adjusted</legend>
+          <div class="field">${segHTML("adjusted", ["Yes", "No"], m.adjusted)}</div>
+        </fieldset>
+
+        <fieldset>
+          <legend>As Left</legend>
+          <div class="field-row">
+            ${atField("asLeftTest1", "Test #1", m.asLeftTest1)}
+            ${atField("asLeftTest2", "Test #2", m.asLeftTest2)}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Result</legend>
+          <div class="field">${segHTML("passFail", ["Pass", "Fail"], m.passFail)}</div>
+        </fieldset>
+
+        <div class="field"><label>Note</label><textarea data-field="note" rows="2">${esc(m.note)}</textarea></div>
+      </div>
+      <div class="action-bar"><div class="action-bar-inner">
+        <button class="btn btn-primary" data-action="done-meter">Done</button>
+      </div></div>
+    `;
+
+    app.querySelectorAll("[data-field]").forEach(el => {
+      el.addEventListener("input", () => {
+        m[el.dataset.field] = el.value;
+        job.updatedAt = Date.now();
+        save();
+      });
+    });
+
+    app.querySelectorAll("[data-seg]").forEach(group => {
+      const field = group.dataset.seg;
+      group.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => {
+          m[field] = btn.dataset.val;
+          if (field === "meterType") {
+            m.accuracyClass = (btn.dataset.val === "Water") ? "1.5" : "";
+          }
+          job.updatedAt = Date.now();
+          save();
+          if (field === "meterType") {
+            renderMeterForm(job.id, m.id);
+            return;
+          }
+          group.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+          if (field === "accuracyClass") {
+            const box = app.querySelector("[data-tolerance-box]");
+            if (box) box.innerHTML = meterToleranceBoxHTML(m);
+          }
+        });
+      });
+    });
+
+    app.querySelectorAll("[data-kbd-toggle]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const input = app.querySelector(`input[data-field="${btn.dataset.kbdToggle}"]`);
+        const numericMode = input.dataset.numericMode;
+        const letters = input.inputMode === "text";
+        input.inputMode = letters ? numericMode : "text";
+        btn.classList.toggle("active", !letters);
+        input.focus();
+      });
+    });
+
+    app.querySelectorAll("[data-at-insert]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const input = app.querySelector(`input[data-field="${btn.dataset.atInsert}"]`);
+        const pos = input.selectionStart ?? input.value.length;
+        input.focus();
+        input.setRangeText("@", pos, input.selectionEnd ?? pos, "end");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    });
+
+    app.querySelectorAll("[data-photo-input]").forEach(input => {
+      input.addEventListener("change", async () => {
+        const files = [...input.files];
+        input.value = "";
+        if (files.length === 0) return;
+        for (const file of files) {
+          try {
+            const blob = await compressImage(file);
+            const id = uid();
+            await saveImageBlob(id, blob);
+            m.images = m.images || [];
+            m.images.push(id);
+          } catch {
+            toast("Couldn't add a photo");
+          }
+        }
+        job.updatedAt = Date.now();
+        save();
+        renderPhotoGrid(m);
+      });
+    });
+
+    app.querySelectorAll("[data-doc-input]").forEach(input => {
+      input.addEventListener("change", async () => {
+        const files = [...input.files];
+        input.value = "";
+        if (files.length === 0) return;
+        for (const file of files) {
+          try {
+            const id = uid();
+            await saveImageBlob(id, file);
+            m.docs = m.docs || [];
+            m.docs.push({ id, name: file.name, type: file.type });
+          } catch {
+            toast("Couldn't add a document");
+          }
+        }
+        job.updatedAt = Date.now();
+        save();
+        renderDocList(m);
+      });
+    });
+
+    renderPhotoGrid(m);
+    renderDocList(m);
+  }
+
+  // Verbatim text below is quoted directly from NIST Handbook 44 (2026 Ed.), a U.S.
+  // federal government publication (17 U.S.C. §105 — not subject to copyright).
+  // Source: Section 2.20 Scales — S.1.2.2.1, S.1.2.2.2, T.N.3.1, T.N.3.2, Table 6.
+  // Maintenance Tolerances. All tolerance values are in multiples of the verification
+  // scale interval "e" (for Class III, e = d, the scale division marked on the device,
+  // e.g. the "0.1 lb" in "500 lb x 0.1 lb").
   // Note: the official 2026 PDF's Table 6 prints the 4th Class III/IIII tolerance-tier
-  // column header as "5" (should read "4", 1-2-3-4 is the table's own numbering
-  // pattern); treated here as a publication typo and corrected to 4e.
+  // column header as "5" (should read "4" — 1-2-3-4 is the table's own numbering
+  // pattern, confirmed against the rendered PDF page); treated here as a publication
+  // typo in NIST's document and corrected to 4e.
   const TOLERANCE_TABLE = {
-    I: { eLabel: "Class I — e set by device marking (auxiliary indication allowed, d < e ≤ 10d, or d < e at e = 1 mg)",
+    I: { quote: `S.1.2.2.1. "The value of 'e' shall be greater than 'd' and less than or equal to 10 'd' (d < e ≤ 10 d)... The requirement in subpart (a) does not apply to a Class I device with e = 1 mg, where d shall be less than 'e' (d < e)."`,
       rows: [
         ["0 – 50,000 e", "1e", "0.5e"],
         ["50,001 – 200,000 e", "2e", "1e"],
         ["200,001+ e", "3e", "1.5e"],
       ] },
-    II: { eLabel: "Class II — e set by device marking (auxiliary indication allowed, d < e ≤ 10d)",
+    II: { quote: `S.1.2.2.1. "The value of 'e' shall be greater than 'd' and less than or equal to 10 'd' (d < e ≤ 10 d)."`,
       rows: [
         ["0 – 5,000 e", "1e", "0.5e"],
         ["5,001 – 20,000 e", "2e", "1e"],
         ["20,001+ e", "3e", "1.5e"],
       ] },
-    III: { eLabel: "Class III — e = d (the marked scale division; ordinary commercial/retail scales)",
+    III: { quote: `S.1.2.2.2. "The value of 'e' is specified by the manufacturer as marked on the device. Except for dynamic monorail scales, 'e' must be equal to 'd'."`,
       rows: [
         ["0 – 500 e", "1e", "0.5e"],
         ["501 – 2,000 e", "2e", "1e"],
         ["2,001 – 4,000 e", "3e", "1.5e"],
         ["4,001+ e", "4e", "2e"],
       ] },
+    // T.N.3.4: crane/hopper scales use the Class III L row of Table 6 instead of the
+    // Class III row, regardless of the device's own marked class, plus a tolerance
+    // floor. The "1,001+" acceptance figure is derived (T.N.3.2: half of maintenance)
+    // — Table 6 itself only spells out the maintenance-side formula verbatim.
+    "III_CRANE_HOPPER": { quote: `T.N.3.4. "The maintenance and acceptance tolerances shall be as specified in T.N.3.1. Maintenance Tolerance Values and T.N.3.2. Acceptance Tolerance Values for Class III L, except that the tolerance for crane and construction materials hopper scales shall not be less than 1 e or 0.1% of the scale capacity, whichever is less."`,
+      rows: [
+        ["0 – 500 e", "1e", "0.5e"],
+        ["501 – 1,000 e", "2e", "1e"],
+        ["1,001+ e", "+1e per additional 500e (or fraction)", "+0.5e per additional 500e (or fraction, derived)"],
+      ],
+      floor: "Floor: tolerance not less than 1e or 0.1% of scale capacity, whichever is less." },
   };
+
+  function toleranceEntryFor(s) {
+    if (!s.class) return null;
+    if (s.class === "III" && s.scaleType === "Crane/Hopper") return TOLERANCE_TABLE["III_CRANE_HOPPER"];
+    return TOLERANCE_TABLE[s.class] || null;
+  }
+
+  function toleranceBoxHTML(s) {
+    const t = toleranceEntryFor(s);
+    if (!t) {
+      return `<p class="hint" style="margin-top:0">Select a Class above to see the applicable Handbook 44 tolerance.</p>`;
+    }
+    return `
+      <p class="hint" style="margin-top:0">${esc(t.quote)}</p>
+      <table class="ref-table">
+        <tr><th>Test load</th><th>Maintenance</th><th>Acceptance</th></tr>
+        ${t.rows.map(([range, maint, acc]) => `<tr><td>${esc(range)}</td><td>${esc(maint)}</td><td>${esc(acc)}</td></tr>`).join("")}
+      </table>
+      ${t.floor ? `<p class="hint">${esc(t.floor)}</p>` : ""}
+      <a class="btn" href="handbook/section-2.20-scales.pdf#page=44" target="_blank" rel="noopener" style="margin-top:8px">Open Table 6 in Handbook (PDF)</a>`;
+  }
+
+  // Verbatim-sourced, same basis as TOLERANCE_TABLE above. Flow meters don't use
+  // I/II/III accuracy classes — each device type has its own class scheme and the
+  // tolerance is a flat percentage of the test draft, not a multiple of e.
+  // Source: Sec. 3.30 Liquid-Measuring Devices T.2 (Table T.2); Sec. 3.37 Mass Flow
+  // Meters T.2 (Table T.2); Sec. 3.36 Water Meters T.1 (Table T.1). All three tables
+  // were checked against the rendered PDF page (no transcription typos found, unlike
+  // Table 6 in Scales).
+  const METER_TOLERANCE_TABLE = {
+    "Liquid": {
+      "0.3": { app: "Large capacity (>115 L/min or 30 gpm) devices incl. motor-fuel; heated products (other than asphalt) >50°C (122°F); asphalt ≤50°C; other liquids not shown where typical delivery is over 200 L (50 gal)", acceptance: "0.2%", maintenance: "0.3%", special: "0.5%" },
+      "0.3A": { app: "Asphalt at temperatures greater than 50°C (122°F)", acceptance: "0.3%", maintenance: "0.3%", special: "0.5%" },
+      "0.5": { app: "Small capacity (4–115 L/min or 1–30 gpm) motor-fuel devices; agri-chemical liquids; other applications not shown where typical delivery is ≤200 L (50 gal)", acceptance: "0.3%", maintenance: "0.5%", special: "0.5%",
+        note: "* For test drafts ≤40 L or 10 gal: maintenance tolerance = 20 mL + 4 mL per indicated liter (or 1 in³ + 1 in³ per indicated gallon); acceptance = half of that." },
+      "1.1": { app: "Petroleum products and other normal liquids from devices with flow rates less than 1 gpm; devices designed to deliver less than 1 gal", acceptance: "0.75%", maintenance: "1.0%", special: "1.25%" },
+    },
+    "Mass Flow": {
+      "0.3": { app: "Large capacity motor-fuel dispensers (>100 L/min or 25 gpm); heated products (other than asphalt) >50°C; asphalt ≤50°C; loading rack meters; vehicle-tank meters; home heating oil; milk & other food products; other liquids where minimum delivery is ≥700 kg (1,500 lb)", acceptance: "0.2%", maintenance: "0.3%", special: "0.5%" },
+      "0.3A": { app: "Asphalt at temperatures greater than 50°C (122°F)", acceptance: "0.3%", maintenance: "0.3%", special: "0.5%" },
+      "0.5": { app: "Small capacity (retail) motor-fuel dispensers; agri-chemical liquids; other liquids where minimum delivery is less than 700 kg (1,500 lb)", acceptance: "0.3%", maintenance: "0.5%", special: "0.5%" },
+      "1.0": { app: "Anhydrous ammonia; LP Gas (including vehicle-tank meters)", acceptance: "0.6%", maintenance: "1.0%", special: "1.0%" },
+      "2.0": { app: "Compressed natural gas as a motor-fuel; other hydrocarbon gases and hydrocarbon gas/air mix applications", acceptance: "1.5%", maintenance: "2.0%", special: "2.0%" },
+      "2.5": { app: "Cryogenic liquid meters; liquefied compressed gases other than LP Gas", acceptance: "1.5%", maintenance: "2.5%", special: "2.5%" },
+    },
+  };
+
+  const WATER_METER_TABLE = {
+    quote: `T.1. "Maintenance and acceptance tolerances shall be as shown in Table T.1. Accuracy Classes and Tolerances for Water Meters." (Single Accuracy Class: 1.5)`,
+    rows: [
+      ["Other than Multi-Jet", "Overregistration", "1.5%", "1.5%", "1.5%"],
+      ["Other than Multi-Jet", "Underregistration", "1.5%", "1.5%", "5.0%"],
+      ["Multi-Jet", "Overregistration", "1.5%", "1.5%", "3.0%"],
+      ["Multi-Jet", "Underregistration", "1.5%", "1.5%", "3.0%"],
+    ],
+  };
+
+  const METER_PDF = {
+    "Liquid": { href: "handbook/section-3.30-liquid-measuring-devices.pdf#page=21", label: "Open Sec. 3.30 Liquid-Measuring Devices (PDF)" },
+    "Mass Flow": { href: "handbook/section-3.37-mass-flow-meters.pdf#page=13", label: "Open Sec. 3.37 Mass Flow Meters (PDF)" },
+    "Water": { href: "handbook/section-3.36-water-meters.pdf#page=8", label: "Open Sec. 3.36 Water Meters (PDF)" },
+  };
+
+  function meterToleranceBoxHTML(m) {
+    if (!m.meterType) {
+      return `<p class="hint" style="margin-top:0">Select a Meter Type above to see the applicable Handbook 44 tolerance.</p>`;
+    }
+    const pdf = METER_PDF[m.meterType];
+    if (m.meterType === "Water") {
+      return `
+        <p class="hint" style="margin-top:0">${esc(WATER_METER_TABLE.quote)}</p>
+        <table class="ref-table">
+          <tr><th>Style</th><th>Direction</th><th>Acceptance</th><th>Maintenance</th><th>Special (min. flow)</th></tr>
+          ${WATER_METER_TABLE.rows.map(([style, dir, acc, maint, spec]) => `<tr><td>${esc(style)}</td><td>${esc(dir)}</td><td>${esc(acc)}</td><td>${esc(maint)}</td><td>${esc(spec)}</td></tr>`).join("")}
+        </table>
+        <a class="btn" href="${pdf.href}" target="_blank" rel="noopener" style="margin-top:8px">${esc(pdf.label)}</a>`;
+    }
+    const entry = (METER_TOLERANCE_TABLE[m.meterType] || {})[m.accuracyClass];
+    if (!entry) {
+      return `<p class="hint" style="margin-top:0">Select an Accuracy Class above to see the applicable tolerance.</p>`;
+    }
+    return `
+      <p class="hint" style="margin-top:0">${esc(entry.app)}</p>
+      <table class="ref-table">
+        <tr><th>Acceptance</th><th>Maintenance</th><th>Special Test</th></tr>
+        <tr><td>${esc(entry.acceptance)}</td><td>${esc(entry.maintenance)}</td><td>${esc(entry.special)}</td></tr>
+      </table>
+      ${entry.note ? `<p class="hint">${esc(entry.note)}</p>` : ""}
+      <a class="btn" href="${pdf.href}" target="_blank" rel="noopener" style="margin-top:8px">${esc(pdf.label)}</a>`;
+  }
+
+  function tolTableHTML(label, t) {
+    return `
+      <div class="section-heading">${esc(label)}</div>
+      <p class="hint" style="margin-top:0">${esc(t.quote)}</p>
+      <table class="ref-table">
+        <tr><th>Test load</th><th>Maintenance</th><th>Acceptance</th></tr>
+        ${t.rows.map(([range, maint, acc]) => `<tr><td>${esc(range)}</td><td>${esc(maint)}</td><td>${esc(acc)}</td></tr>`).join("")}
+      </table>
+      ${t.floor ? `<p class="hint">${esc(t.floor)}</p>` : ""}`;
+  }
 
   function renderReference() {
     const classTables = CLASS_OPTIONS.map((c) => {
       const t = TOLERANCE_TABLE[c];
-      if (!t) return "";
-      return `
-        <div class="section-heading">Class ${esc(c)} Tolerances</div>
-        <p class="hint" style="margin-top:0">${esc(t.eLabel)}</p>
-        <table class="ref-table">
-          <tr><th>Test load</th><th>Maintenance</th><th>Acceptance</th></tr>
-          ${t.rows.map(([range, maint, acc]) => `<tr><td>${esc(range)}</td><td>${esc(maint)}</td><td>${esc(acc)}</td></tr>`).join("")}
-        </table>`;
-    }).join("");
+      return t ? tolTableHTML(`Class ${c} Tolerances`, t) : "";
+    }).join("") + tolTableHTML("Class III — Crane/Hopper Tolerances", TOLERANCE_TABLE["III_CRANE_HOPPER"]);
 
     app.innerHTML = `
       ${topbar({ title: "Tolerance Reference", back: true })}
       <div class="screen">
-        <p class="hint">NIST Handbook 44 (2026 Ed.), Sec. 2.20 Scales, T.N.3.1–T.N.3.2 (Table 6). Find e (the
-        scale's marked division value), compute n = test load ÷ e, then read the tolerance off the matching row —
-        it's that many multiples of e.</p>
-        <p class="hint">Use <b>Maintenance</b> tolerance for As Found readings on an in-service scale.
-        Use the tighter <b>Acceptance</b> tolerance for As Left readings after an adjustment, or for a new/just-serviced scale.</p>
+        <p class="hint">NIST Handbook 44 (2026 Ed.), Sec. 2.20 Scales. <b>T.N.3.1.</b> "The maintenance
+        tolerance values are as specified in Table 6. Maintenance Tolerances." <b>T.N.3.2.</b> "The acceptance
+        tolerance values shall be one-half the maintenance tolerance values."</p>
+        <p class="hint">Find e (the scale's marked division value), compute n = test load ÷ e, then read the
+        tolerance off the matching row below — it's that many multiples of e. Use <b>Maintenance</b> for As Found
+        readings on an in-service scale; use the tighter <b>Acceptance</b> for As Left readings after an
+        adjustment, or for a new/just-serviced scale.</p>
 
         ${classTables}
+
+        <div class="section-heading">Full text</div>
+        <a class="btn" href="handbook/section-2.20-scales.pdf#page=44" target="_blank" rel="noopener">Open Sec. 2.20 Scales (PDF)</a>
+        <a class="btn" href="handbook/section-1.10-general-code.pdf" target="_blank" rel="noopener" style="margin-top:8px">Open Sec. 1.10 General Code (PDF)</a>
+        <p class="hint">Bundled with the app — opens offline. The Scales PDF link jumps to Table 6 (Tolerances); General Code covers terms like tare, zero, and acceptance vs. maintenance that apply to every device.</p>
       </div>
     `;
   }
@@ -838,6 +1219,104 @@
     });
   }
 
+  // ---------- print ----------
+  function printFieldRow(label, value) {
+    return value ? `<div class="pr-row"><span class="pr-label">${esc(label)}</span><span class="pr-value">${esc(value)}</span></div>` : "";
+  }
+
+  function printScaleHTML(s) {
+    const title = [s.unitNumber, s.makeModel].filter(Boolean).join(" · ") || "Scale";
+    return `
+      <div class="pr-scale">
+        <div class="pr-scale-title">${esc(title)}${s.class ? ` (Class ${esc(s.class)})` : ""}${s.passFail ? ` — ${esc(s.passFail)}` : ""}</div>
+        <div class="pr-grid">
+          ${printFieldRow("Serial #", s.serial)}
+          ${printFieldRow("Scale Location", s.scaleLocation)}
+          ${printFieldRow("Capacity by Division", s.capacityByDivision)}
+          ${printFieldRow("Shift Test", s.shiftTest)}
+          ${printFieldRow("As Found #1", s.asFoundTest1)}
+          ${printFieldRow("As Found #2", s.asFoundTest2)}
+          ${printFieldRow("As Found #3", s.asFoundTest3)}
+          ${printFieldRow("Adjusted", s.adjusted)}
+          ${printFieldRow("As Left #1", s.asLeftTest1)}
+          ${printFieldRow("As Left #2", s.asLeftTest2)}
+        </div>
+        ${s.note ? `<div class="pr-note"><em>Note:</em> ${esc(s.note)}</div>` : ""}
+      </div>`;
+  }
+
+  function printMeterHTML(m) {
+    const title = [m.unitNumber, m.makeModel].filter(Boolean).join(" · ") || "Meter";
+    const typeLabel = [m.meterType, m.accuracyClass ? `Class ${m.accuracyClass}` : ""].filter(Boolean).join(" · ");
+    return `
+      <div class="pr-scale">
+        <div class="pr-scale-title">${esc(title)}${typeLabel ? ` (${esc(typeLabel)})` : ""}${m.passFail ? ` — ${esc(m.passFail)}` : ""}</div>
+        <div class="pr-grid">
+          ${printFieldRow("Serial #", m.serial)}
+          ${printFieldRow("Meter Location", m.meterLocation)}
+          ${printFieldRow("Rated Capacity / Flow", m.ratedCapacity)}
+          ${printFieldRow("As Found #1", m.asFoundTest1)}
+          ${printFieldRow("As Found #2", m.asFoundTest2)}
+          ${printFieldRow("As Found #3", m.asFoundTest3)}
+          ${printFieldRow("Adjusted", m.adjusted)}
+          ${printFieldRow("As Left #1", m.asLeftTest1)}
+          ${printFieldRow("As Left #2", m.asLeftTest2)}
+        </div>
+        ${m.note ? `<div class="pr-note"><em>Note:</em> ${esc(m.note)}</div>` : ""}
+      </div>`;
+  }
+
+  function printJob(job) {
+    const t = ensureTrip(job);
+    const tripRows = [
+      t.outStart ? printFieldRow("Left for job", new Date(t.outStart).toLocaleString()) : "",
+      t.outEnd ? printFieldRow("Arrived on site", new Date(t.outEnd).toLocaleString()) : "",
+      t.backStart ? printFieldRow("Left site", new Date(t.backStart).toLocaleString()) : "",
+      t.backEnd ? printFieldRow("Back", new Date(t.backEnd).toLocaleString()) : "",
+      t.milesOut ? printFieldRow("Miles there", t.milesOut) : "",
+      t.milesBack ? printFieldRow("Miles back", t.milesBack) : "",
+    ].join("");
+    const legs = tripLegs(t);
+
+    const byClass = CLASS_OPTIONS.map(c => [c, job.scales.filter(s => s.class === c)]);
+    const unclassified = job.scales.filter(s => !CLASS_OPTIONS.includes(s.class));
+
+    const area = document.getElementById("printArea");
+    area.innerHTML = `
+      <div class="pr-header">
+        <h1>${esc(job.customer || "Calibration Job")}</h1>
+        <div class="pr-sub">${esc([job.jobNumber ? "Job #" + job.jobNumber : "", fmtDate(job.date)].filter(Boolean).join(" · "))}</div>
+      </div>
+      <div class="pr-section">
+        ${printFieldRow("Location", job.location)}
+        ${printFieldRow("Phone", job.phone)}
+        ${printFieldRow("Contact", job.contact)}
+        ${printFieldRow("Email", job.email)}
+        ${printFieldRow("Calibration Schedule", job.calibrationSchedule)}
+        ${printFieldRow("Next Calibration Due By", fmtDate(job.nextDueBy))}
+      </div>
+      ${tripRows ? `
+        <div class="pr-section">
+          <div class="pr-section-title">Trip</div>
+          ${tripRows}
+          ${legs.length ? printFieldRow("Summary", legs.join(" · ")) : ""}
+        </div>` : ""}
+      ${byClass.map(([c, list]) => list.length ? `<div class="pr-section-title">Class ${esc(c)} Scales</div>${list.map(printScaleHTML).join("")}` : "").join("")}
+      ${unclassified.length ? `<div class="pr-section-title">Unclassified Scales</div>${unclassified.map(printScaleHTML).join("")}` : ""}
+      ${ensureMeters(job).length ? `<div class="pr-section-title">Meters</div>${ensureMeters(job).map(printMeterHTML).join("")}` : ""}
+      ${job.notes ? `<div class="pr-section"><div class="pr-section-title">Notes</div><div class="pr-note">${esc(job.notes)}</div></div>` : ""}
+      <div class="pr-footer">Printed ${esc(new Date().toLocaleString())}</div>
+    `;
+  }
+
+  function currentDevice() {
+    const job = findJob(route.jobId);
+    if (!job) return null;
+    if (route.view === "scaleForm") return findScale(job, route.scaleId);
+    if (route.view === "meterForm") return findMeter(job, route.meterId);
+    return null;
+  }
+
   // ---------- actions ----------
   document.addEventListener("click", (e) => {
     const el = e.target.closest("[data-action]");
@@ -847,6 +1326,14 @@
     if (action === "back") { history.back(); return; }
     if (action === "open-reference") { navigate("reference"); return; }
     if (action === "open-settings") { navigate("settings"); return; }
+
+    if (action === "print-job") {
+      const job = findJob(route.jobId);
+      if (!job) return;
+      printJob(job);
+      window.print();
+      return;
+    }
 
     if (action === "trip-now") {
       const job = findJob(route.jobId);
@@ -890,6 +1377,10 @@
       if (!job) return;
       if (confirm(`Delete the job for "${job.customer || "this job"}"? This can't be undone.`)) {
         job.scales.forEach(s => (s.images || []).forEach(id => deleteImageBlob(id).catch(() => {})));
+        ensureMeters(job).forEach(m => {
+          (m.images || []).forEach(id => deleteImageBlob(id).catch(() => {}));
+          (m.docs || []).forEach(d => deleteImageBlob(d.id).catch(() => {}));
+        });
         db.jobs = db.jobs.filter(j => j.id !== job.id);
         save();
         navigate("home", {}, true);
@@ -908,6 +1399,24 @@
     }
 
     if (action === "open-scale") { navigate("scaleForm", { jobId: el.dataset.job, scaleId: el.dataset.scale }); return; }
+
+    if (action === "add-document") {
+      app.querySelector("[data-doc-input]")?.click();
+      return;
+    }
+
+    if (action === "delete-doc") {
+      const job = findJob(route.jobId);
+      const d = currentDevice();
+      if (!d) return;
+      const id = el.dataset.docId;
+      d.docs = (d.docs || []).filter(x => x.id !== id);
+      job.updatedAt = Date.now();
+      save();
+      deleteImageBlob(id).catch(() => {});
+      renderDocList(d);
+      return;
+    }
 
     if (action === "done-scale") {
       const job = findJob(route.jobId);
@@ -933,6 +1442,43 @@
       return;
     }
 
+    if (action === "add-meter") {
+      const job = findJob(el.dataset.job);
+      const m = newMeter();
+      ensureMeters(job).push(m);
+      job.updatedAt = Date.now();
+      save();
+      navigate("meterForm", { jobId: job.id, meterId: m.id });
+      return;
+    }
+
+    if (action === "open-meter") { navigate("meterForm", { jobId: el.dataset.job, meterId: el.dataset.meter }); return; }
+
+    if (action === "done-meter") {
+      const job = findJob(route.jobId);
+      const m = findMeter(job, route.meterId);
+      if (m && isMeterEmpty(m)) {
+        job.meters = ensureMeters(job).filter(x => x.id !== m.id);
+        save();
+      }
+      history.back();
+      return;
+    }
+
+    if (action === "delete-meter") {
+      const job = findJob(route.jobId);
+      const m = findMeter(job, route.meterId);
+      if (!m) return;
+      if (confirm("Delete this meter entry?")) {
+        (m.images || []).forEach(id => deleteImageBlob(id).catch(() => {}));
+        (m.docs || []).forEach(d => deleteImageBlob(d.id).catch(() => {}));
+        job.meters = ensureMeters(job).filter(x => x.id !== m.id);
+        save();
+        navigate("job", { jobId: job.id }, true);
+      }
+      return;
+    }
+
     if (action === "add-photo") {
       app.querySelector("[data-photo-input]")?.click();
       return;
@@ -949,7 +1495,7 @@
 
     if (action === "delete-photo") {
       const job = findJob(route.jobId);
-      const s = findScale(job, route.scaleId);
+      const s = currentDevice();
       if (!s) return;
       const id = el.dataset.photoId;
       s.images = (s.images || []).filter(i => i !== id);

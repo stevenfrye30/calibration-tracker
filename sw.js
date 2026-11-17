@@ -1,4 +1,4 @@
-const CACHE_NAME = "caltracker-v8";
+const CACHE_NAME = "caltracker-v10";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,6 +8,11 @@ const ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
   "./apple-touch-icon.png",
+  "./handbook/section-1.10-general-code.pdf",
+  "./handbook/section-2.20-scales.pdf",
+  "./handbook/section-3.30-liquid-measuring-devices.pdf",
+  "./handbook/section-3.36-water-meters.pdf",
+  "./handbook/section-3.37-mass-flow-meters.pdf",
 ];
 
 self.addEventListener("install", (e) => {

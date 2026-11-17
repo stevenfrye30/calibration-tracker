@@ -259,6 +259,7 @@ fieldset legend {
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  text-decoration: none;
   width: 100%;
 }
 .btn-primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
@@ -424,3 +425,75 @@ fieldset legend {
   font-weight: 600;
 }
 .trip-summary.is-hidden { display: none; }
+
+.doc-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.doc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.doc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+.doc-del {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.print-only { display: none; }
+
+@media print {
+  body > *:not(#printArea) { display: none !important; }
+  #printArea { display: block !important; }
+  #printArea * { color: #000 !important; background: #fff !important; }
+  body { background: #fff; }
+  @page { margin: 0.6in; }
+}
+
+#printArea {
+  padding: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #000;
+  background: #fff;
+}
+.pr-header h1 { margin: 0 0 2px; font-size: 22px; }
+.pr-sub { color: #444; font-size: 13px; margin-bottom: 16px; }
+.pr-section { margin-bottom: 16px; }
+.pr-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #999;
+  padding-bottom: 3px;
+  margin: 18px 0 8px;
+}
+.pr-row { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; border-bottom: 1px solid #eee; }
+.pr-label { flex: 0 0 180px; color: #555; font-weight: 600; }
+.pr-value { flex: 1; }
+.pr-scale { break-inside: avoid; margin-bottom: 14px; border: 1px solid #ccc; border-radius: 6px; padding: 10px 12px; }
+.pr-scale-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.pr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px; }
+.pr-grid .pr-row { flex-direction: column; gap: 1px; border-bottom: none; padding: 2px 0; }
+.pr-grid .pr-label { flex: none; font-size: 11px; }
+.pr-note { font-size: 12px; margin-top: 6px; }
+.pr-footer { margin-top: 24px; font-size: 11px; color: #777; text-align: right; }
