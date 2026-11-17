@@ -1,4 +1,4 @@
-const CACHE_NAME = "caltracker-v7";
+const CACHE_NAME = "caltracker-v8";
 const ASSETS = [
   "./",
   "./index.html",

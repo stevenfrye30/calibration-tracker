@@ -368,3 +368,59 @@ fieldset legend {
   max-height: 100%;
   border-radius: 8px;
 }
+
+.trip-stamps { display: flex; flex-direction: column; gap: 10px; }
+
+.trip-row { display: flex; align-items: center; gap: 10px; }
+
+.trip-now {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 18px;
+  cursor: pointer;
+}
+.trip-now:active { background: var(--border); }
+
+.trip-row-main { flex: 1; min-width: 0; }
+.trip-row-main label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.trip-row-main input[type="datetime-local"] {
+  width: 100%;
+  font-size: 15px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.trip-clear {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+.trip-clear.is-hidden { visibility: hidden; pointer-events: none; }
+
+.trip-summary {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.trip-summary.is-hidden { display: none; }

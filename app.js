@@ -22,6 +22,10 @@
     ["customer", "Customer"], ["location", "Location"], ["phone", "Phone"],
     ["contact", "Contact"], ["email", "Email"], ["jobNumber", "Job #"], ["date", "Date"],
     ["calibrationSchedule", "Calibration Schedule"], ["nextDueBy", "Next Calibration Due By"],
+    ["tripOutStart", "Left For Job"], ["tripArrived", "Arrived On Site"],
+    ["tripLeftSite", "Left Site"], ["tripBack", "Back"],
+    ["driveThereMin", "Drive There (min)"], ["onSiteMin", "On Site (min)"], ["driveBackMin", "Drive Back (min)"],
+    ["milesOut", "Miles There"], ["milesBack", "Miles Back"],
     ["class", "Class"], ["unitNumber", "Unit #"], ["scaleLocation", "Scale Location"],
     ["makeModel", "Make & Model #"], ["serial", "Serial #"],
     ["capacityByDivision", "Capacity by Division"], ["shiftTest", "Shift Test"],
@@ -35,12 +39,13 @@
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { jobs: [] };
+      if (!raw) return { jobs: [], settings: { homeAddress: "", mapsApiKey: "" } };
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed.jobs)) return { jobs: [] };
+      if (!Array.isArray(parsed.jobs)) parsed.jobs = [];
+      if (!parsed.settings) parsed.settings = { homeAddress: "", mapsApiKey: "" };
       return parsed;
     } catch {
-      return { jobs: [] };
+      return { jobs: [], settings: { homeAddress: "", mapsApiKey: "" } };
     }
   }
 
@@ -161,7 +166,13 @@
       jobNumber: "", date: todayISO(), calibrationSchedule: "", nextDueBy: "",
       notes: "", createdAt: Date.now(), updatedAt: Date.now(),
       scales: [],
+      trip: { outStart: null, outEnd: null, backStart: null, backEnd: null, milesOut: "", milesBack: "" },
     };
+  }
+
+  function ensureTrip(job) {
+    if (!job.trip) job.trip = { outStart: null, outEnd: null, backStart: null, backEnd: null, milesOut: "", milesBack: "" };
+    return job.trip;
   }
 
   function newScale() {
@@ -233,6 +244,16 @@
   function jobToRows(job) {
     const base = {};
     JOB_FIELDS.forEach(([key]) => { base[key] = job[key]; });
+    const t = ensureTrip(job);
+    base.tripOutStart = t.outStart ? new Date(t.outStart).toLocaleString() : "";
+    base.tripArrived = t.outEnd ? new Date(t.outEnd).toLocaleString() : "";
+    base.tripLeftSite = t.backStart ? new Date(t.backStart).toLocaleString() : "";
+    base.tripBack = t.backEnd ? new Date(t.backEnd).toLocaleString() : "";
+    base.driveThereMin = (t.outStart && t.outEnd) ? Math.round((t.outEnd - t.outStart) / 60000) : "";
+    base.onSiteMin = (t.outEnd && t.backStart) ? Math.round((t.backStart - t.outEnd) / 60000) : "";
+    base.driveBackMin = (t.backStart && t.backEnd) ? Math.round((t.backEnd - t.backStart) / 60000) : "";
+    base.milesOut = t.milesOut || "";
+    base.milesBack = t.milesBack || "";
     if (job.scales.length === 0) return [base];
     return job.scales.map(s => ({ ...base, ...s }));
   }
@@ -281,6 +302,27 @@
     return `${m}/${d}/${y}`;
   }
 
+  function toDatetimeLocal(ms) {
+    if (!ms) return "";
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function fromDatetimeLocal(str) {
+    if (!str) return null;
+    const t = new Date(str).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+
+  function fmtDuration(ms) {
+    if (ms == null || ms < 0) return "";
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h === 0 ? `${m} min` : `${h}h ${m}m`;
+  }
+
   // ---------- rendering ----------
   function render() {
     if (route.view === "job" && !findJob(route.jobId)) route = { view: "home" };
@@ -293,14 +335,16 @@
     if (route.view === "job") return renderJobScreen(route.jobId);
     if (route.view === "scaleForm") return renderScaleForm(route.jobId, route.scaleId);
     if (route.view === "reference") return renderReference();
+    if (route.view === "settings") return renderSettings();
     renderHome();
   }
 
-  function topbar({ title, sub, back, rightIcon, rightLabel, onRight }) {
+  function topbar({ title, sub, back, rightIcon, rightLabel, onRight, right2Icon, right2Label, onRight2 }) {
     return `
       <div class="topbar">
         ${back ? `<button class="icon-btn" data-action="back" aria-label="Back">‹</button>` : ""}
         <h1>${esc(title)}${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</h1>
+        ${right2Icon ? `<button class="icon-btn" data-action="${onRight2}" aria-label="${esc(right2Label || "")}">${right2Icon}</button>` : ""}
         ${rightIcon ? `<button class="icon-btn" data-action="${onRight}" aria-label="${esc(rightLabel || "")}">${rightIcon}</button>` : ""}
       </div>`;
   }
@@ -308,7 +352,7 @@
   function renderHome() {
     const jobs = [...db.jobs].sort((a, b) => b.updatedAt - a.updatedAt);
     app.innerHTML = `
-      ${topbar({ title: "Calibration Jobs", rightIcon: "📏", rightLabel: "Reference", onRight: "open-reference" })}
+      ${topbar({ title: "Calibration Jobs", right2Icon: "⚙", right2Label: "Settings", onRight2: "open-settings", rightIcon: "📏", rightLabel: "Reference", onRight: "open-reference" })}
       <div class="screen">
         ${jobs.length === 0 ? `
           <div class="empty-state">
@@ -380,6 +424,8 @@
           ${JOB_FIELDS.map(([k, label, type]) => fieldHTML(job[k], k, label, type)).join("")}
         </div>
 
+        ${tripSectionHTML(job)}
+
         ${byClass.map(([c, list]) => section(`Class ${c} Scales`, list)).join("")}
         ${section("Unclassified", unclassified)}
         ${job.scales.length === 0 ? `<div class="empty-state">No scales added yet.</div>` : ""}
@@ -401,6 +447,17 @@
         job[el.dataset.field] = el.value;
         job.updatedAt = Date.now();
         save();
+      });
+    });
+
+    app.querySelectorAll("[data-trip-field]").forEach(el => {
+      el.addEventListener("input", () => {
+        const t = ensureTrip(job);
+        const key = el.dataset.tripField;
+        t[key] = el.type === "datetime-local" ? fromDatetimeLocal(el.value) : el.value;
+        job.updatedAt = Date.now();
+        save();
+        if (el.type === "datetime-local") refreshTripUI(job);
       });
     });
   }
@@ -429,6 +486,146 @@
         <button type="button" class="at-btn" data-at-insert="${key}" aria-label="Insert @">@</button>
       </div>
     </div>`;
+  }
+
+  const TRIP_STAMPS = [
+    ["outStart", "Start driving", "🚗"],
+    ["outEnd", "Arrived on site", "📍"],
+    ["backStart", "Leaving site", "🚪"],
+    ["backEnd", "Back / done driving", "🏠"],
+  ];
+
+  function tripLegs(t) {
+    const legs = [];
+    if (t.outStart && t.outEnd) legs.push(`Drove ${fmtDuration(t.outEnd - t.outStart)} to site`);
+    if (t.outEnd && t.backStart) legs.push(`On site ${fmtDuration(t.backStart - t.outEnd)}`);
+    if (t.backStart && t.backEnd) legs.push(`Drove ${fmtDuration(t.backEnd - t.backStart)} back`);
+    return legs;
+  }
+
+  function mileageFieldHTML(key, label, value, canEstimate) {
+    return `<div class="field"><label>${esc(label)}</label>
+      <div class="field-inline">
+        <input type="text" inputmode="decimal" data-trip-field="${key}" value="${esc(value)}">
+        ${canEstimate ? `<button type="button" data-action="estimate-miles" data-trip="${key}" aria-label="Estimate via Maps">Est.</button>` : ""}
+      </div>
+    </div>`;
+  }
+
+  function tripSectionHTML(job) {
+    const t = ensureTrip(job);
+    const rows = TRIP_STAMPS.map(([key, label, icon]) => `
+      <div class="trip-row" data-trip-row="${key}">
+        <button type="button" class="trip-now" data-action="trip-now" data-trip="${key}" aria-label="${esc(label)} now">${icon}</button>
+        <div class="trip-row-main">
+          <label>${esc(label)}</label>
+          <input type="datetime-local" data-trip-field="${key}" value="${toDatetimeLocal(t[key])}">
+        </div>
+        <button type="button" class="trip-clear ${t[key] ? "" : "is-hidden"}" data-action="trip-clear" data-trip="${key}" aria-label="Clear ${esc(label)}">×</button>
+      </div>`).join("");
+
+    const legs = tripLegs(t);
+    const canEstimate = !!(db.settings.homeAddress && db.settings.mapsApiKey && job.location);
+
+    return `
+      <fieldset>
+        <legend>Trip</legend>
+        <div class="trip-stamps">${rows}</div>
+        <div class="trip-summary${legs.length ? "" : " is-hidden"}">${esc(legs.join(" · "))}</div>
+        <div class="field-row" style="margin-top:14px">
+          ${mileageFieldHTML("milesOut", "Miles there", t.milesOut, canEstimate)}
+          ${mileageFieldHTML("milesBack", "Miles back", t.milesBack, canEstimate)}
+        </div>
+        ${!canEstimate ? `<p class="hint">Set a home base address and Google Maps API key in Settings to auto-estimate miles — or just type them in.</p>` : ""}
+      </fieldset>`;
+  }
+
+  function refreshTripUI(job) {
+    const t = ensureTrip(job);
+    TRIP_STAMPS.forEach(([key]) => {
+      const row = app.querySelector(`[data-trip-row="${key}"]`);
+      if (!row) return;
+      const input = row.querySelector("input[data-trip-field]");
+      if (input) input.value = toDatetimeLocal(t[key]);
+      const clearBtn = row.querySelector(".trip-clear");
+      if (clearBtn) clearBtn.classList.toggle("is-hidden", !t[key]);
+    });
+    const summaryEl = app.querySelector(".trip-summary");
+    if (summaryEl) {
+      const legs = tripLegs(t);
+      summaryEl.textContent = legs.join(" · ");
+      summaryEl.classList.toggle("is-hidden", legs.length === 0);
+    }
+  }
+
+  let mapsScriptPromise = null;
+  function loadMapsScript(apiKey) {
+    if (window.google && window.google.maps && window.google.maps.DistanceMatrixService) {
+      return Promise.resolve();
+    }
+    if (mapsScriptPromise) return mapsScriptPromise;
+    mapsScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`;
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => { mapsScriptPromise = null; reject(new Error("maps-load-failed")); };
+      document.head.appendChild(script);
+    });
+    return mapsScriptPromise;
+  }
+
+  function distanceMiles(origin, destination) {
+    return new Promise((resolve, reject) => {
+      const service = new google.maps.DistanceMatrixService();
+      service.getDistanceMatrix({
+        origins: [origin],
+        destinations: [destination],
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL,
+      }, (response, status) => {
+        if (status !== "OK") return reject(new Error(status));
+        const el = response && response.rows && response.rows[0] && response.rows[0].elements && response.rows[0].elements[0];
+        if (!el || el.status !== "OK") return reject(new Error((el && el.status) || "NO_ROUTE"));
+        resolve(Math.round((el.distance.value / 1609.344) * 10) / 10);
+      });
+    });
+  }
+
+  async function estimateMiles(job, legKey, btn) {
+    if (!job) return;
+    if (!db.settings.homeAddress || !db.settings.mapsApiKey) {
+      toast("Set a home address and Maps API key in Settings first");
+      return;
+    }
+    if (!job.location) {
+      toast("Add a job Location first");
+      return;
+    }
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      await loadMapsScript(db.settings.mapsApiKey);
+      const origin = legKey === "milesOut" ? db.settings.homeAddress : job.location;
+      const destination = legKey === "milesOut" ? job.location : db.settings.homeAddress;
+      const miles = await Promise.race([
+        distanceMiles(origin, destination),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000)),
+      ]);
+      const t = ensureTrip(job);
+      t[legKey] = String(miles);
+      job.updatedAt = Date.now();
+      save();
+      const input = app.querySelector(`input[data-trip-field="${legKey}"]`);
+      if (input) input.value = String(miles);
+      toast(`Estimated ${miles} mi`);
+    } catch {
+      toast("Couldn't estimate miles — check connection and API key");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
   }
 
   function renderScaleForm(jobId, scaleId) {
@@ -559,37 +756,86 @@
     renderPhotoGrid(s);
   }
 
+  // Source: NIST Handbook 44 (2026 Ed.), Section 2.20 Scales — T.N.3.1 (Table 6.
+  // Maintenance Tolerances), T.N.3.2 (Acceptance = 1/2 Maintenance), S.1.2.2.2 (for
+  // Class III, e is marked by the manufacturer and e = d). All tolerance values below
+  // are in multiples of the verification scale interval "e" (= the scale division "d"
+  // printed on a Class III scale, e.g. the "0.1 lb" in "500 lb x 0.1 lb").
+  // Note: the official 2026 PDF's Table 6 prints the 4th Class III/IIII tolerance-tier
+  // column header as "5" (should read "4", 1-2-3-4 is the table's own numbering
+  // pattern); treated here as a publication typo and corrected to 4e.
+  const TOLERANCE_TABLE = {
+    I: { eLabel: "Class I — e set by device marking (auxiliary indication allowed, d < e ≤ 10d, or d < e at e = 1 mg)",
+      rows: [
+        ["0 – 50,000 e", "1e", "0.5e"],
+        ["50,001 – 200,000 e", "2e", "1e"],
+        ["200,001+ e", "3e", "1.5e"],
+      ] },
+    II: { eLabel: "Class II — e set by device marking (auxiliary indication allowed, d < e ≤ 10d)",
+      rows: [
+        ["0 – 5,000 e", "1e", "0.5e"],
+        ["5,001 – 20,000 e", "2e", "1e"],
+        ["20,001+ e", "3e", "1.5e"],
+      ] },
+    III: { eLabel: "Class III — e = d (the marked scale division; ordinary commercial/retail scales)",
+      rows: [
+        ["0 – 500 e", "1e", "0.5e"],
+        ["501 – 2,000 e", "2e", "1e"],
+        ["2,001 – 4,000 e", "3e", "1.5e"],
+        ["4,001+ e", "4e", "2e"],
+      ] },
+  };
+
   function renderReference() {
+    const classTables = CLASS_OPTIONS.map((c) => {
+      const t = TOLERANCE_TABLE[c];
+      if (!t) return "";
+      return `
+        <div class="section-heading">Class ${esc(c)} Tolerances</div>
+        <p class="hint" style="margin-top:0">${esc(t.eLabel)}</p>
+        <table class="ref-table">
+          <tr><th>Test load</th><th>Maintenance</th><th>Acceptance</th></tr>
+          ${t.rows.map(([range, maint, acc]) => `<tr><td>${esc(range)}</td><td>${esc(maint)}</td><td>${esc(acc)}</td></tr>`).join("")}
+        </table>`;
+    }).join("");
+
     app.innerHTML = `
       ${topbar({ title: "Tolerance Reference", back: true })}
       <div class="screen">
-        <p class="hint">Transcribed from a photo of the printed form — confirm against your official copy before relying on it.</p>
+        <p class="hint">NIST Handbook 44 (2026 Ed.), Sec. 2.20 Scales, T.N.3.1–T.N.3.2 (Table 6). Find e (the
+        scale's marked division value), compute n = test load ÷ e, then read the tolerance off the matching row —
+        it's that many multiples of e.</p>
+        <p class="hint">Use <b>Maintenance</b> tolerance for As Found readings on an in-service scale.
+        Use the tighter <b>Acceptance</b> tolerance for As Left readings after an adjustment, or for a new/just-serviced scale.</p>
 
-        <div class="section-heading">Maintenance Tolerance — Class I</div>
-        <p class="hint" style="margin-top:0">e = greater of 1d and 1 mg</p>
-        <table class="ref-table">
-          <tr><th>Range</th><th>Tolerance</th></tr>
-          <tr><td>0 – 50,000d</td><td>1e</td></tr>
-          <tr><td>50,001 – 200,000d</td><td>2e</td></tr>
-          <tr><td>200,001d and over</td><td>3e</td></tr>
-        </table>
-
-        <div class="section-heading">Maintenance Tolerance — Class II</div>
-        <p class="hint" style="margin-top:0">d = 1 scale division</p>
-        <table class="ref-table">
-          <tr><th>Range</th><th>Tolerance</th></tr>
-          <tr><td>0 – 5,000d</td><td>1d</td></tr>
-          <tr><td>5,001 – 50,000d</td><td>2d</td></tr>
-          <tr><td>50,001d and over</td><td>3d</td></tr>
-        </table>
-
-        <div class="section-heading">Notes on the form</div>
-        <table class="ref-table">
-          <tr><td>Traceability</td><td>Handbook 44</td></tr>
-          <tr><td>Test method</td><td>Certified test weights</td></tr>
-        </table>
+        ${classTables}
       </div>
     `;
+  }
+
+  function renderSettings() {
+    const s = db.settings;
+    app.innerHTML = `
+      ${topbar({ title: "Settings", back: true })}
+      <div class="screen">
+        <div class="field">
+          <label>Home Base Address</label>
+          <input type="text" data-setting="homeAddress" value="${esc(s.homeAddress)}" placeholder="e.g. 123 Main St, Anytown, IN" autocomplete="off">
+          <p class="hint">Used as the start/end point for the Trip section's mileage estimates.</p>
+        </div>
+        <div class="field">
+          <label>Google Maps API Key</label>
+          <input type="text" data-setting="mapsApiKey" value="${esc(s.mapsApiKey)}" placeholder="AIza..." autocomplete="off">
+          <p class="hint">From Google Cloud Console (Maps JavaScript API + Distance Matrix API enabled), restricted by HTTP referrer to this app's domain. Leave blank to type mileage in by hand.</p>
+        </div>
+      </div>
+    `;
+    app.querySelectorAll("[data-setting]").forEach(el => {
+      el.addEventListener("input", () => {
+        db.settings[el.dataset.setting] = el.value;
+        save();
+      });
+    });
   }
 
   // ---------- actions ----------
@@ -600,6 +846,34 @@
 
     if (action === "back") { history.back(); return; }
     if (action === "open-reference") { navigate("reference"); return; }
+    if (action === "open-settings") { navigate("settings"); return; }
+
+    if (action === "trip-now") {
+      const job = findJob(route.jobId);
+      if (!job) return;
+      const t = ensureTrip(job);
+      t[el.dataset.trip] = Date.now();
+      job.updatedAt = Date.now();
+      save();
+      refreshTripUI(job);
+      return;
+    }
+
+    if (action === "trip-clear") {
+      const job = findJob(route.jobId);
+      if (!job) return;
+      const t = ensureTrip(job);
+      t[el.dataset.trip] = null;
+      job.updatedAt = Date.now();
+      save();
+      refreshTripUI(job);
+      return;
+    }
+
+    if (action === "estimate-miles") {
+      estimateMiles(findJob(route.jobId), el.dataset.trip, el);
+      return;
+    }
 
     if (action === "new-job") {
       const job = newJob();
